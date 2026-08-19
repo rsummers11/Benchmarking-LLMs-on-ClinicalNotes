@@ -1,0 +1,964 @@
+---
+title: "Analysis of 46 LLMs preformance on reading medical notes"
+author: "Dr. Nusrat Rabbee, run by Pritam on 6/5/2025"
+date: "2025-04-11"
+output: 
+  html_document:
+    toc: true
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Analyzing the 46 LLMs scoring of Medical Notes 
+
+There are 29 diagnosis questions per Medical note. We used the **GPT.o3.mini_binary** as the response for each model by the unique LLM model. 
+The gound truth is stored in *gt*. 
+
+
+```{r init, echo=FALSE, include=FALSE, results="hide"}
+######## INITIAL PRE-PROCESSING ################
+projroot="your_path_here/final_data"
+
+#srcdir=file.path(projroot,"\\dev\\data")
+#progdir=file.path(projroot,"\\dev\\progs")
+#datadir=file.path(projroot,"\\dev\\derived_data")
+#outdir=file.path(projroot,"\\dev\\output")
+
+#source(file.path(progdir,"pre_process.R"))
+load(file.path(projroot,"DAT.RData"))
+```
+
+
+## Data Wrangling 
+### Frequency tables
+
+
+```{r freq, echo=FALSE}
+#Fleiss k for each of Q1-Q6
+
+table(DAT$open_source,DAT$model_family)
+table(DAT$open_source,DAT$model_generation)
+table(DAT$model_family,DAT$model_generation)
+
+```
+
+<br><br><br>
+We see that frequency tables make it clear that open_source, model_family, and model_generation are not independent. Here's the dependency we have:
+
+ - open_source == "no":
+    - Only includes Claude and GPT models.
+    - None of these have valid model_generation values (they’re missing or all zero).
+
+ - open_source == "yes":
+    - Only includes Llama and Qwen.
+    - These have detailed and varied model_generation values (1, 1.5, 2, ..., 3.3).
+
+<br>    
+
+## Analysis game plan
+
+The data is organized long and we will use linear models and estimated means (glm/emmeans/predict) to get estimates of precision and recall. The linear mixed models were fit at first using random effects for each question or each note(record) - but they did not yield sifficient variation to justify the random effects. So regular generalized linear models were used as the main modeling framework. 
+    Since open-source and closed-source models come from different families and generations, analyzing them separately avoids confounding. We’ll run precision and recall models independently for:
+
+ - *Open-source models* (e.g., Llama, Qwen),
+ - *Closed-source models* (e.g., GPT, Claude).
+
+Each analysis will have:
+
+ - Outcome: GPT.o3.mini_binary
+
+ - Predictors: model_family, model_generation (open), model_size (open), note_length, and duration_since_release
+
+ - Subset either where gt == TRUE (recall model) or where GPT.o3.mini_binary == TRUE (precision model)
+
+    
+## Analysis I - Closed source models
+
+### Analysis I - Recall & Precision & F1 Score
+
+
+```{r}
+library(tidyverse)
+DAT %>% head
+```
+```{r}
+DAT %>% filter(model == "meta-llama/Llama-2-70b-chat-hf") %>% select(model, model_size) %>% unique
+```
+
+
+
+```{r analyI_closed, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
+library(dplyr)
+library(knitr)
+source(file.path(projroot,"precisionrecall_v2.R"))
+DAT$recordId=as.factor(as.character(DAT$recordId))
+# Subset to closed-source models only
+DAT <- DAT %>% filter(GPT.o3.mini_binary != "")
+closed_models <- DAT %>% filter(open_source == "no")
+## RECALL
+recall_data <- closed_models %>% filter(gt == "True")
+                 
+## PRECISION
+precision_data <- closed_models %>% filter(GPT.o3.mini_binary == 'True')
+recall_precision_closed(recall_data,"Closed_Source_Models(Recall)",precision_data,"Closed_Source_Models(Precision)","Closed_Source_Models(F1 Score)",
+                         full_data = closed_models
+)
+```
+
+
+```{r}
+closed_models %>% filter(gt == "True")  %>% select(GPT.o3.mini_binary) %>% filter(GPT.o3.mini_binary != "") %>% table
+```
+
+
+
+
+- Recall Plateau:
+Closed-source models shows exceptionally high recall over any duration since release, meaning they almost always catch true positives. No dramatic improvement is possible here — they're already near optimal.
+
+- Precision Improving:
+The precision ranges from ~0.79 to ~0.83 shows that the model precision values are also stable over time with older models slightly reducing false positives. This likely comes from refinement incorporations at time of release, improved calibration  and evolving updates in the backend at time of release.
+
+
+- F1 Score Mirrors Precision Trend:
+Because recall is stable, and precision is also hardly varying, the F1 score is largely driven by precision. 
+
+Closed-source models show stable behavior: they’ve long had excellent recall, and precision is also stable becoming slightly worse over time.
+
+The same pattern holds for F1 as time progresses since release.
+
+
+## Analysis II - Open source models
+
+### Analysis II - Recall & Precision & F1 Score
+
+
+```{r analyII_open, echo=FALSE,warning=FALSE,message=FALSE,results='asis'}
+#library(dplyr)
+#source(file.path(progdir,"precisionrecall.R"))
+#DAT$recordId=as.factor(as.character(DAT$recordId))
+library(knitr)
+source(file.path(projroot,"precisionrecall_v2.R"))
+DAT$model_size=as.factor(as.character(DAT$model_size))
+DAT$model_generation=as.factor(as.character(DAT$model_generation))
+DAT$model_family=as.factor(as.character(DAT$model_family))
+
+# Subset to open-source models only
+open_models <- DAT %>% filter(open_source == "yes")
+# log10_model_size is required by every open-model GLM formula, so it's added here on
+# open_models itself (needed when passed as full_data to bootstrap_f1_ci()).
+open_models$log10_model_size <- log10(as.numeric(as.character(open_models$model_size)))
+## RECALL
+recall_data <- open_models %>% filter(gt == "True")
+## PRECISION
+precision_data <- open_models %>% filter(GPT.o3.mini_binary == 'True')
+recall_precision_open(recall_data,"Open_Source_Models(Recall)",precision_data,"Open_Source_Models(Precision)","Open_Source_Models(F1 Score)",
+                       full_data = open_models
+)
+```
+
+
+<br>
+<br>
+Shows that open models are not improving for clinical diagnostics of note reading with duration. Precision and F1 are getting worse over time clearly. Likely due to:
+
+ - smaller model sizes
+ - no domain-specific training
+ 
+But with larger model sizes, the precision is improving because larger models have the capcaity to learm more complex patterns and relations in the vast amoung of medical data it is trained on. 
+
+
+
+```{r}
+library(binom)
+get_prop_with_ci <- function(x){
+  x <- x == "True"
+  n <- length(x)
+  positives <- sum(x)
+  tibble(binom.confint(positives, n, methods = "exact"))
+}
+
+raw_recall <- DAT %>% filter(gt == "True") %>% group_by(model) %>% summarise_at(vars("GPT.o3.mini_binary"), .funs = \(x)  mean(x == "True"))
+raw_recall
+```
+
+```{r}
+raw_recall <- DAT %>% filter(gt == "True") %>% group_by(model) %>% reframe(get_prop_with_ci(GPT.o3.mini_binary))
+raw_recall
+```
+
+```{r}
+names(raw_recall) <- c("model",  paste0("Recall_", names(raw_recall)[2:length(names(raw_recall))]))
+raw_recall %>% head
+```
+
+
+
+```{r}
+raw_precision <- DAT %>% filter(GPT.o3.mini_binary == "True") %>% group_by(model) %>% reframe(get_prop_with_ci(gt))
+raw_precision
+```
+
+
+```{r}
+names(raw_precision) <- c("model",  paste0("Precision_", names(raw_precision)[2:length(names(raw_precision))]))
+raw_precision %>% head
+```
+
+
+
+
+```{r}
+combined <- inner_join(raw_precision, raw_recall)
+combined
+```
+```{r}
+combined <- combined %>% mutate(F1_mean = 2*Precision_mean*Recall_mean / (Precision_mean + Recall_mean))
+combined
+```
+
+
+```{r}
+combined <- combined %>%
+    mutate(
+      var_precision = ((Precision_upper - Precision_lower) / (2 * 1.96))^2,
+      var_recall = ((Recall_upper - Recall_lower) / (2 * 1.96))^2,
+      dF1_dP = 2 * Recall_mean^2 / (Precision_mean + Recall_mean)^2,
+      dF1_dR = 2 * Precision_mean^2 / (Precision_mean + Recall_mean)^2,
+      var_F1 = dF1_dP^2 * var_precision + dF1_dR^2 * var_recall,
+      se_F1 = sqrt(var_F1),
+      F1_lower = F1_mean - 1.96 * se_F1,
+      F1_upper = F1_mean + 1.96 * se_F1
+    )
+combined
+```
+
+
+Bootstrap CIs for F1 score, per model (feeds manuscript Table 2).
+
+```{r}
+f1_scorer <- function(data, indices){
+  d <- data[indices,]
+  prec_data <- d %>% filter(GPT.o3.mini_binary == "True")
+  precision <- sum(prec_data$gt == "True") / length(prec_data$gt)
+  rec_data <- d %>% filter(gt == "True")
+  recall <- sum(rec_data$GPT.o3.mini_binary == "True") / length(rec_data$gt)
+  score <- 2*precision*recall / (precision + recall)
+  score
+}
+
+test <- DAT %>% filter(model =="Qwen/Qwen1.5-4B-Chat")
+out <- f1_scorer(test, indices=seq(1, length(test$gt)))
+out
+```
+
+```{r}
+# Note-level bootstrap: resamples note_id (the true per-patient unit), not raw rows, since a
+# single model has one row per (note, diagnosis) pair.
+get_f1_intervals_note_level <- function(data, R = 2000, seed = 42) {
+  unique_notes <- unique(data$note_id)
+  note_index <- split(seq_len(nrow(data)), data$note_id)
+  set.seed(seed)
+  note_samples <- lapply(seq_len(R), function(i) sample(unique_notes, length(unique_notes), replace = TRUE))
+  vals <- foreach(b = seq_len(R), .combine = c, .errorhandling = "remove") %dopar% {
+    idx <- unlist(note_index[as.character(note_samples[[b]])], use.names = FALSE)
+    f1_scorer(data, idx)
+  }
+  tibble(F1_lower_bootstrap = quantile(vals, 0.025, na.rm = TRUE),
+         F1_upper_bootstrap = quantile(vals, 0.975, na.rm = TRUE))
+}
+
+n_cores <- min(32, max(1, parallel::detectCores() - 1))
+doParallel::registerDoParallel(cores = n_cores)
+bootstrap_cis <- DAT %>% reframe(get_f1_intervals_note_level(cur_data()), .by = model)
+```
+
+
+```{r}
+combined_all <- inner_join(combined, bootstrap_cis)
+combined_all %>% head
+```
+
+```{r}
+write.csv(combined_all, "performance_results_by_model.csv")
+```
+
+
+```{r}
+DAT %>% filter(model =="Qwen/Qwen-14B-Chat")
+```
+
+
+Now let's make figures for the paper
+
+First make figures comparing model families
+
+```{r}
+library(tidyverse)
+
+```
+
+
+```{r}
+# closed models
+recall_closed <- read_csv("Table_1_Recall_by_Model_Family(Closed Models).csv")
+precision_closed <- read_csv("Table_3_Precision_by_Model_Family(Closed Models).csv")
+f1_closed <- read_csv("Table_5_F1_Score_by_Model_Family(Closed Models).csv")
+```
+
+```{r}
+recall_closed$metric <- "Recall"
+precision_closed$metric <- "Precision"
+closed_metrics <- bind_rows(recall_closed, precision_closed)
+closed_metrics
+```
+
+```{r}
+f1_closed_reformat <- tibble(model_family = f1_closed$model_family, response = f1_closed$F1, SE = f1_closed$se_F1, asymp.LCL = f1_closed$F1_LCL, asymp.UCL = f1_closed$F1_UCL, metric  = "F1")
+f1_closed_reformat
+```
+```{r}
+closed_metrics <- bind_rows(closed_metrics, f1_closed_reformat)
+closed_metrics$metric <- factor(closed_metrics$metric, levels=c("Recall", "Precision", "F1"))
+closed_metrics$model_family <- as.factor(closed_metrics$model_family)
+closed_metrics <- closed_metrics %>% rename(performance_metric = metric)
+ggplot(closed_metrics, aes(x = model_family, y= response*100, color=model_family)) +           
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = asymp.LCL*100, ymax = asymp.UCL*100), position = position_dodge(width = 0.5), width = 0.2) +
+  labs(title = "",
+  x = "Model family", y = "Metric value (%)") + facet_wrap(~performance_metric) +
+   theme_gray() + scale_y_continuous(limits = c(0,100)) + theme(legend.title=element_blank(), text=element_text(family="Times New Roman", size = 14))
+```
+```{r}
+ggsave("performance_by_model_family.svg", width = 6, height = 5, units = "in")
+ggsave("performance_by_model_family.pdf", width = 6, height = 5, units = "in", device=cairo_pdf)
+```
+```{r}
+recall_open <- read_csv("Table_7_Recall_by_Model_Family(Open Models).csv")
+precision_open <- read_csv("Table_10_Precision_by_Model_Family(Open Models).csv")
+f1_open <- read_csv("Table_13_F1_Score_by_Model_Family(Open Models).csv")
+```
+
+```{r}
+recall_open$performance_metric <- "Recall"
+precision_open$performance_metric <- "Precision"
+f1_open_reformat <- tibble(model_family = f1_open$model_family, prob = f1_open$F1, SE = f1_open$se_F1, asymp.LCL = f1_open$F1_LCL, asymp.UCL = f1_open$F1_UCL, performance_metric  = "F1")
+open_metrics <- bind_rows(recall_open, precision_open, f1_open_reformat)
+open_metrics
+```
+
+```{r}
+open_metrics$performance_metric <- factor(open_metrics$performance_metric, levels=c("Recall", "Precision", "F1"))
+ggplot(open_metrics, aes(x = model_family, y= prob*100, color=model_family)) +           
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = asymp.LCL*100, ymax = asymp.UCL*100), position = position_dodge(width = 0.5), width = 0.2) +
+  labs(title = "",
+  x = "Model family", y = "Metric value (%)") + facet_wrap(~performance_metric) +
+   theme_gray() + scale_y_continuous(limits = c(0,100)) + theme(legend.title=element_blank(), text=element_text(family="Times New Roman", size = 14))
+```
+```{r}
+ggsave("performance_by_model_family_open.svg", width = 6, height = 5, units = "in")
+ggsave("performance_by_model_family_open.pdf", width = 6, height = 5, units = "in", device=cairo_pdf)
+```
+
+Now we will make the plot showing the performance of open-source models with model size
+
+
+```{r}
+combined_all <- read_csv("performance_results_by_model.csv")
+open_models <- DAT %>% filter(open_source == "yes") %>% pull(model) %>% unique 
+combined_all_with_model_sizes <- inner_join(combined_all, DAT %>% select(model, model_size, model_family) %>% unique)
+combined_all_with_model_sizes <- combined_all_with_model_sizes %>% select(Precision_mean, Recall_mean, F1_mean, model, model_size, model_family) %>% filter(model %in% open_models) %>% mutate(model_size = as.numeric(as.character(model_size)))
+combined_all_with_model_sizes
+```
+
+```{r}
+ggplot(combined_all_with_model_sizes, aes(x = model_size, y = 100*F1_mean, color=model_family, size=model_size)) + geom_point() + scale_x_log10() 
+```
+
+```{r}
+recall_by_size <- read_csv("Table_9_Recall_by_log10_Model_Size(Open Models).csv")
+precision_by_size <- read_csv("Table_12_Precision_by_log10_Model_Size(Open Models).csv")
+f1_by_size <- read_csv("Table_14_F1_Score_by_log10_Model_Size(Open Models).csv")
+
+```
+```{r}
+recall_by_size <- recall_by_size %>% mutate(model_size = 10^log10_model_size)
+recall_by_size %>% head
+```
+
+
+```{r}
+ggplot(recall_by_size, aes(x = model_size, y = prob*100, color=model_family, fill=model_family)) +
+          geom_line(size = 1) +
+          geom_ribbon(aes(ymin = 100*asymp.LCL, ymax = 100*asymp.UCL), color=NA, alpha = 0.2) +
+          geom_point(mapping=aes(x = model_size, y = 100*Recall_mean, color=model_family, size=model_size), data=combined_all_with_model_sizes) +
+          labs(
+               x = "Model Size in Billions", y = "Recall (%)") + scale_x_log10() + guides(color=guide_legend(title="model family"), fill="none", size=guide_legend(title = "model size")) + 
+            theme_gray() +  theme(text=element_text(family="Times New Roman", size = 14))
+```
+```{r}
+ggsave("tables_and_figures_in_paper/recall_by_model_sizev2.svg", width = 7, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/recall_by_model_sizev2.pdf", width = 7, height = 4, units = "in", device=cairo_pdf)
+```
+
+```{r}
+precision_by_size <- precision_by_size %>% mutate(model_size = 10^log10_model_size)
+ggplot(precision_by_size, aes(x = model_size, y = 100*prob, color=model_family, fill=model_family)) +
+          geom_line(size = 1) +
+          geom_ribbon(aes(ymin = 100*asymp.LCL, ymax = 100*asymp.UCL), color=NA, alpha = 0.5) +
+          geom_point(mapping=aes(x = model_size, y = 100*Precision_mean, color=model_family, size=model_size), data=combined_all_with_model_sizes) +
+          labs(
+               x = "Model Size in Billions", y = "Precision (%)") + scale_x_log10() + ylim(0, 100) + guides(color=guide_legend(title="model family"), fill="none", size=guide_legend(title = "model size")) + 
+            theme_gray() +  theme(text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/precision_by_model_sizev2.svg", width = 7, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/precision_by_model_sizev2.pdf", width = 7, height = 4, units = "in", device=cairo_pdf)
+```
+
+
+
+
+```{r}
+f1_by_size <- f1_by_size %>% mutate(model_size = 10^log10_model_size)
+ggplot(f1_by_size, aes(x = model_size, y = F1*100, color=model_family, fill=model_family)) +
+          geom_line(size = 1) +
+          geom_ribbon(aes(ymin = F1_LCL*100, ymax = F1_UCL*100), color=NA, alpha = 0.2)  +
+          geom_point(mapping=aes(x = model_size, y = 100*F1_mean, color=model_family, size=model_size), data=combined_all_with_model_sizes) +
+          labs(
+               x = "Model Size in Billions", y = "F1 (%)") + scale_x_log10() + ylim(0, 100)+ guides(color=guide_legend(title="model family"), fill="none", size=guide_legend(title = "model size")) + 
+            theme_gray() +  theme(text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/F1_by_model_size.svg", width = 7, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/F1_by_model_size.pdf", width = 7, height = 4, units = "in", device=cairo_pdf)
+```
+Next, we will plot the peformances w.r.t. model recency
+
+```{r}
+# closed models
+recall_with_time <- read_csv("Table_2_Recall_by_Release_Duration(Closed Models).csv")
+precision_with_time <- read_csv("Table_4_Precision_by_Release_Duration(Closed Models).csv")
+f1_with_time <- read_csv("Table_6_F1_Score_by_Release_Duration(Closed Models).csv")
+recall_with_time %>% head
+```
+
+```{r}
+recall_with_time$performance_metric <- "Recall"
+precision_with_time$performance_metric <- "Precision"
+f1_with_time$performance_metric <- "F1"
+recall_with_time <- recall_with_time %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL,performance_metric)
+precision_with_time <- precision_with_time %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL, performance_metric)
+f1_with_time <- f1_with_time %>% rename(prob = F1, se=se_F1, asymp.LCL=F1_LCL, asymp.UCL = F1_UCL) %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL, performance_metric)
+all_metrics_with_time <- rbind(recall_with_time, precision_with_time, f1_with_time)
+all_metrics_with_time
+```
+
+
+```{r}
+as.Date(DAT$date_of_release) + DAT$duration_since_release
+```
+```{r}
+reference_date <- "2025-06-06"
+all_metrics_with_time <- all_metrics_with_time %>% mutate(estimated_date_of_release = as.Date(reference_date) - duration_since_release)
+all_metrics_with_time %>% head
+```
+
+```{r}
+model_dates <- DAT %>% filter(open_source == "no") %>% select(model, date_of_release, model_family) %>% unique
+model_dates
+```
+
+```{r}
+combined_with_dates <- inner_join(combined_all, model_dates)
+combined_with_dates
+```
+
+
+```{r}
+combined_with_dates_long <- combined_with_dates %>% select(model, Recall_mean, Precision_mean, F1_mean, date_of_release, model_family) %>% rename(Recall = Recall_mean, Precision = Precision_mean, F1 = F1_mean) %>% pivot_longer(., c(Recall, Precision, F1), names_to = "performance_metric", values_to = "prob") %>% mutate(date_of_release = as.Date(date_of_release))
+combined_with_dates_long
+```
+
+
+```{r}
+ggplot(all_metrics_with_time, aes(x=estimated_date_of_release, y= 100*prob, color=model_family, fill=model_family)) + geom_line() +
+  geom_ribbon(aes(ymin = asymp.LCL*100, ymax = asymp.UCL*100), color= NA, alpha = 0.2) + xlab("Date of model release") + scale_y_continuous(limits = c(0,100), name = "Metric value (%)") + geom_point(mapping=aes(x=date_of_release, y = 100*prob, color=model_family), data=combined_with_dates_long) + facet_wrap(~factor(performance_metric, levels=c("Recall", "Precision", "F1")), nrow=1) +  theme_gray() +  theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/performance_with_time.svg", width = 8, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/performance_with_time.pdf", width = 8, height = 4, units = "in", device=cairo_pdf)
+```
+
+```{r}
+#open models
+recall_with_time <- read_csv("Table_8_Recall_by_Release_Duration(Open Models).csv")
+precision_with_time <- read_csv("Table_11_Precision_by_Release_Duration(Open Models).csv")
+f1_with_time <- read_csv("Table_15_F1_Score_by_Release_Duration(Open Models).csv")
+```
+```{r}
+recall_with_time$performance_metric <- "Recall"
+precision_with_time$performance_metric <- "Precision"
+f1_with_time$performance_metric <- "F1"
+recall_with_time <- recall_with_time %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL,performance_metric)
+precision_with_time <- precision_with_time %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL, performance_metric)
+f1_with_time <- f1_with_time %>% rename(prob = F1, se=se_F1, asymp.LCL=F1_LCL, asymp.UCL = F1_UCL) %>% select(duration_since_release, model_family, prob, asymp.LCL, asymp.UCL, performance_metric) 
+all_metrics_with_time <- rbind(recall_with_time, precision_with_time, f1_with_time)
+all_metrics_with_time
+```
+```{r}
+reference_date <- "2025-06-06"
+all_metrics_with_time <- all_metrics_with_time %>% mutate(estimated_date_of_release = as.Date(reference_date) - duration_since_release)
+model_dates <- DAT %>% filter(open_source == "yes") %>% select(model, date_of_release, model_family) %>% unique
+
+combined_with_dates <- inner_join(combined_all, model_dates)
+combined_with_dates
+```
+```{r}
+combined_with_dates_long <- combined_with_dates %>% select(model, Recall_mean, Precision_mean, F1_mean, date_of_release, model_family) %>% rename(Recall = Recall_mean, Precision = Precision_mean, F1 = F1_mean) %>% pivot_longer(., c(Recall, Precision, F1), names_to = "performance_metric", values_to = "prob") %>% mutate(date_of_release = as.Date(date_of_release))
+combined_with_dates_long
+```
+```{r}
+ggplot(all_metrics_with_time, aes(x=estimated_date_of_release, y= 100*prob, color=model_family, fill=model_family)) + geom_line() +
+  geom_ribbon(aes(ymin = asymp.LCL*100, ymax = asymp.UCL*100), color=NA, alpha = 0.2) + xlab("Date of model release") + scale_y_continuous(limits = c(0,100), name = "Metric value (%)") + geom_point(mapping=aes(x=date_of_release, y = 100*prob, color=model_family), data=combined_with_dates_long) + facet_wrap(~factor(performance_metric, levels=c("Recall", "Precision", "F1")), nrow=1) +  theme_gray() +  theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/performance_with_time_openv2.svg", width = 8, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/performance_with_time_openv2.pdf", width = 8, height = 4, units = "in", device=cairo_pdf)
+```
+Let's analyze effect of note length
+
+```{r}
+recall_data <- closed_models %>% filter(gt == "True")
+                 
+  recall_model_fixed <- glm(
+    as.factor(GPT.o3.mini_binary) ~  model_family +
+      note_length + duration_since_release,
+    data = recall_data,
+    family = binomial
+  )
+  print(summary(recall_model_fixed))
+```
+```{r}
+precision_data <- closed_models %>% filter(GPT.o3.mini_binary == 'True')
+  precision_model_fixed <- glm(
+    as.factor(gt) ~ model_family + note_length + duration_since_release,
+    data = precision_data,
+    family = binomial
+  )
+  print(summary(precision_model_fixed))
+```
+```{r}
+note_lengths <- seq(min(DAT$note_length), max(DAT$note_length), length.out = 100)
+note_lengths
+```
+```{r}
+  pred_data_gpt <- data.frame(duration_since_release = mean(closed_models$duration_since_release),
+                          model_family = "GPT",  # Adjust if needed
+                          note_length = note_lengths)
+  pred_data_claude <- data.frame(duration_since_release = mean(closed_models$duration_since_release),
+                          model_family = "Claude",  # Adjust if needed
+                          note_length = note_lengths)
+  pred_data <- rbind(pred_data_claude, pred_data_gpt)
+  precision_preds <- predict(precision_model_fixed, newdata = pred_data, type = "response", se.fit = TRUE)
+  recall_preds <- predict(recall_model_fixed, newdata = pred_data, type = "response", se.fit = TRUE)
+```
+
+```{r}
+ recall_preds_pred_ints <- predict(recall_model_fixed, newdata = pred_data,  interval="prediction", se.fit = TRUE)
+```
+
+```{r}
+  pred_data$recall <- recall_preds$fit
+  pred_data$recall_se <- recall_preds$se.fit
+  pred_data$recall_asymp.LCL <- pred_data$recall - 1.96 * pred_data$recall_se
+  pred_data$recall_asymp.UCL <- pred_data$recall + 1.96 * pred_data$recall_se
+  pred_data$precision <- precision_preds$fit
+  pred_data$precision_se <- precision_preds$se.fit
+  pred_data$precision_asymp.LCL <- pred_data$precision - 1.96 * pred_data$precision_se
+  pred_data$precision_asymp.UCL <- pred_data$precision + 1.96 * pred_data$precision_se
+  
+  row.idx=which(pred_data$duration_since_release == mean(pred_data$duration_since_release))
+  
+  pred_data  <- pred_data %>%
+    mutate(F1 = 2 * (precision * recall) / (precision + recall))
+  # Recall and precision share one reference grid (pred_data), so the bootstrap reuses it as
+  # both recall_grid and precision_grid.
+  ci_notelength_closed <- bootstrap_f1_ci(
+    closed_models, recall_model_fixed, precision_model_fixed,
+    recall_filter = function(d) d %>% filter(gt == "True"),
+    precision_filter = function(d) d %>% filter(GPT.o3.mini_binary == "True"),
+    recall_grid = pred_data %>% select(model_family, note_length, duration_since_release),
+    precision_grid = pred_data %>% select(model_family, note_length, duration_since_release)
+  )
+  pred_data$F1_LCL <- ci_notelength_closed$F1_LCL
+  pred_data$F1_UCL <- ci_notelength_closed$F1_UCL
+  pred_data$se_F1 <- ci_notelength_closed$F1_SE
+  write.csv(pred_data,
+            file.path(projroot,"Table_16_Recall_and_Precision_by_NoteLength(Closed Models).csv"),
+            row.names = FALSE)
+```
+
+```{r}
+pred_data %>% head
+```
+
+```{r}
+recall_portion <- pred_data %>% select(model_family, note_length, recall, recall_asymp.LCL, recall_asymp.UCL) %>% rename(metric_value = recall, asymp.LCL = recall_asymp.LCL, asymp.UCL = recall_asymp.UCL) %>% mutate(performance_metric = "Recall")
+precision_portion <- pred_data %>% select(model_family,note_length, precision, precision_asymp.LCL, precision_asymp.UCL) %>% rename(metric_value = precision, asymp.LCL = precision_asymp.LCL, asymp.UCL = precision_asymp.UCL) %>% mutate(performance_metric = "Precision")
+f1_portion <- pred_data %>% select(model_family, note_length, F1, F1_LCL, F1_UCL) %>% rename(metric_value = F1, asymp.LCL = F1_LCL, asymp.UCL = F1_UCL) %>% mutate(performance_metric = "F1")
+combined_note_length <- rbind(recall_portion, precision_portion, f1_portion)  %>% mutate(metric_value = 100*metric_value, asymp.LCL = 100*asymp.LCL, asymp.UCL = 100* asymp.UCL)
+ggplot(combined_note_length, aes(x=note_length/1000, y= metric_value, color=model_family, fill=model_family)) + 
+    geom_line() + 
+  geom_ribbon(aes(ymin=asymp.LCL, ymax=asymp.UCL), color=NA, alpha=0.2) + facet_wrap(~factor(performance_metric, levels=c("Recall", "Precision", "F1"))) + scale_x_continuous(name="Note length (in thousand words)") + scale_y_continuous(name = "Metric value (%)", limits = c(0,100)) +  theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/performance_with_notelength_closedv2.svg", width = 8, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/performance_with_notelength_closedv2.pdf", width = 8, height = 4, units = "in", device=cairo_pdf)
+```
+
+```{r}
+DAT$model_size=as.factor(as.character(DAT$model_size))
+DAT$model_generation=as.factor(as.character(DAT$model_generation))
+DAT$model_family=as.factor(as.character(DAT$model_family))
+
+# Subset to open-source models only
+open_models <- DAT %>% filter(open_source == "yes")
+# log10_model_size is needed on open_models for the bootstrap_f1_ci() call below.
+open_models$log10_model_size <- log10(as.numeric(as.character(open_models$model_size)))
+## RECALL
+recall_data <- open_models %>% filter(gt == "True")
+## PRECISION
+precision_data <- open_models %>% filter(GPT.o3.mini_binary == 'True')
+recall_data <- open_models %>% filter(gt == "True")
+  data=recall_data
+  data$GPT.o3.mini_binary=as.factor(data$GPT.o3.mini_binary)
+  data$model_family=as.factor(as.character(data$model_family))
+  #data$model_size=as.factor(data$model_size)
+  data$log10_model_size <- log10(as.numeric(as.character(data$model_size)))
+  print(max(data$log10_model_size))
+  print(min(data$log10_model_size))
+  data$generation=as.factor(data$model_generation)
+  
+  #RECALL
+  
+  recall_model_fixed <- glm(
+    GPT.o3.mini_binary ~  model_family + log10_model_size + #model_generation +
+      note_length + duration_since_release,
+    data = data,
+    family = binomial
+  )
+  print(summary(recall_model_fixed))
+```
+
+
+```{r}
+  data=precision_data
+  
+  data$gt=as.factor(data$gt)
+  data$model_family=as.factor(as.character(data$model_family))
+  #data$model_size=as.factor(data$model_size)
+  data$log10_model_size <- log10(as.numeric(as.character(data$model_size)))
+  data$generation=as.factor(data$model_generation)
+  precision_model_fixed <- glm(
+    gt ~ model_family + log10_model_size + note_length + duration_since_release,
+    data = data,
+    family = binomial
+  )
+  print(summary(precision_model_fixed))
+```
+```{r}
+data$log10_model_size <-  log10(as.numeric(as.character(data$model_size)))
+  pred_data_qwen <- data.frame(duration_since_release = mean(data$duration_since_release),
+                          model_family = "Qwen",  # Adjust if needed
+                          note_length = note_lengths,
+                          log10_model_size = mean(data$log10_model_size))
+  pred_data_llama <- data.frame(duration_since_release = mean(data$duration_since_release),
+                          model_family = "Llama",  # Adjust if needed
+                          note_length = note_lengths,
+                          log10_model_size = mean(data$log10_model_size))
+  pred_data <- rbind(pred_data_qwen, pred_data_llama)
+  precision_preds <- predict(precision_model_fixed, newdata = pred_data, type = "response", se.fit = TRUE)
+  recall_preds <- predict(recall_model_fixed, newdata = pred_data, type = "response", se.fit = TRUE)
+```
+
+```{r}
+  pred_data$recall <- recall_preds$fit
+  pred_data$recall_se <- recall_preds$se.fit
+  pred_data$recall_asymp.LCL <- pred_data$recall - 1.96 * pred_data$recall_se
+  pred_data$recall_asymp.UCL <- pred_data$recall + 1.96 * pred_data$recall_se
+  pred_data$precision <- precision_preds$fit
+  pred_data$precision_se <- precision_preds$se.fit
+  pred_data$precision_asymp.LCL <- pred_data$precision - 1.96 * pred_data$precision_se
+  pred_data$precision_asymp.UCL <- pred_data$precision + 1.96 * pred_data$precision_se
+  
+  row.idx=which(pred_data$duration_since_release == mean(pred_data$duration_since_release))
+  
+  pred_data  <- pred_data %>%
+    mutate(F1 = 2 * (precision * recall) / (precision + recall))
+  # Recall and precision share one reference grid (pred_data), reused as both recall_grid and
+  # precision_grid.
+  ci_notelength_open <- bootstrap_f1_ci(
+    open_models, recall_model_fixed, precision_model_fixed,
+    # matches the as.factor() conversion used in the point-estimate fit above
+    recall_filter = function(d) d %>% filter(gt == "True") %>% mutate(GPT.o3.mini_binary = as.factor(GPT.o3.mini_binary)),
+    precision_filter = function(d) d %>% filter(GPT.o3.mini_binary == "True") %>% mutate(gt = as.factor(gt)),
+    recall_grid = pred_data %>% select(model_family, note_length, duration_since_release, log10_model_size),
+    precision_grid = pred_data %>% select(model_family, note_length, duration_since_release, log10_model_size)
+  )
+  pred_data$F1_LCL <- ci_notelength_open$F1_LCL
+  pred_data$F1_UCL <- ci_notelength_open$F1_UCL
+  pred_data$se_F1 <- ci_notelength_open$F1_SE
+  write.csv(pred_data,
+            file.path(projroot,"Table_17_Recall_and_Precision_by_NoteLength(Open Models).csv"),
+            row.names = FALSE)
+```
+
+```{r}
+recall_portion <- pred_data %>% select(model_family,note_length, recall, recall_asymp.LCL, recall_asymp.UCL) %>% rename(metric_value = recall, asymp.LCL = recall_asymp.LCL, asymp.UCL = recall_asymp.UCL) %>% mutate(performance_metric = "Recall")
+precision_portion <- pred_data %>% select(model_family, note_length, precision, precision_asymp.LCL, precision_asymp.UCL) %>% rename(metric_value = precision, asymp.LCL = precision_asymp.LCL, asymp.UCL = precision_asymp.UCL) %>% mutate(performance_metric = "Precision")
+f1_portion <- pred_data %>% select(model_family, note_length, F1, F1_LCL, F1_UCL) %>% rename(metric_value = F1, asymp.LCL = F1_LCL, asymp.UCL = F1_UCL) %>% mutate(performance_metric = "F1")
+combined_note_length <- rbind(recall_portion, precision_portion, f1_portion)  %>% mutate(metric_value = 100*metric_value, asymp.LCL = 100*asymp.LCL, asymp.UCL = 100* asymp.UCL)
+ggplot(combined_note_length, aes(x=note_length/1000, y= metric_value, color=model_family, fill=model_family)) + 
+    geom_line() + 
+  geom_ribbon(aes(ymin=asymp.LCL, ymax=asymp.UCL), color=NA, alpha=0.2) + facet_wrap(~factor(performance_metric, levels=c("Recall", "Precision", "F1"))) + scale_x_continuous(name="Note length (in thousand words)") + scale_y_continuous(name = "Metric value (%)", limits = c(0,100)) +  theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/performance_with_notelength_openv2.svg", width = 8, height = 4, units = "in")
+ggsave("tables_and_figures_in_paper/performance_with_notelength_openv2.pdf", width = 8, height = 4, units = "in", device=cairo_pdf)
+```
+```{r}
+pred_data
+```
+```{r}
+DAT %>% head
+```
+
+
+
+```{r}
+DAT <- DAT %>% mutate(dataset = if_else(startsWith(as.character(recordId), "NIH"), "NIH", "MIMIC"))
+table(DAT$dataset)
+```
+
+```{r}
+
+
+# Subset to open-source models only
+open_models <- DAT %>% filter(open_source == "yes")
+## RECALL
+recall_data <- open_models %>% filter(gt == "True")
+recall_data$log10_model_size <- log10(as.numeric(as.character(recall_data$model_size)))
+recall_data <- recall_data %>% filter(GPT.o3.mini_binary != "")
+recall_data <- recall_data %>% mutate(dataset = if_else(startsWith(as.character(recordId), "NIH"), "NIH", "MIMIC"))
+  recall_model_fixed_dataset <- glm(
+    GPT.o3.mini_binary == "True" ~  model_family + log10_model_size + #model_generation +
+      note_length + duration_since_release + dataset + diagnosis,
+    data = recall_data,
+    family = binomial
+  )
+  print(summary(recall_model_fixed_dataset))
+
+```
+
+
+
+```{r}
+  recall_emm_fixed <- emmeans(recall_model_fixed_dataset, 
+                              ~ model_family + diagnosis, 
+                              type = "response")
+  recall_emm_diagnosis=data.frame(recall_emm_fixed)
+  recall_emm_diagnosis
+```
+
+```{r}
+ggplot(recall_emm_diagnosis, aes(x=diagnosis, y=100* response, color=model_family, fill=model_family)) + geom_col(position="dodge", width = 0.8) + geom_errorbar(aes(ymin=asymp.LCL*100, ymax=asymp.UCL*100), position=position_dodge(width=0.8)) +  scale_x_discrete(name="Elixhauser comorbidity") + scale_y_continuous(name="Recall (%)") + coord_flip() + theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/recall_with_diagnosis.svg", width = 8, height = 8, units = "in")
+ggsave("tables_and_figures_in_paper/recall_with_diagnosis.pdf", width = 8, height = 8, units = "in", device=cairo_pdf)
+```
+
+
+
+```{r}
+precision_data <- open_models %>% filter(GPT.o3.mini_binary == 'True')
+precision_data <- precision_data %>% mutate(dataset = if_else(startsWith(as.character(recordId), "NIH"), "NIH", "MIMIC"))
+  data=precision_data
+  
+  data$gt=as.factor(data$gt)
+  data$model_family=as.factor(as.character(data$model_family))
+  #data$model_size=as.factor(data$model_size)
+  data$log10_model_size <- log10(as.numeric(as.character(data$model_size)))
+  data$generation=as.factor(data$model_generation)
+  
+  
+  # Fit precision model: how often ground truth is positive when model says positive
+  precision_model_fixed <- glm(
+    gt ~ model_family + log10_model_size + note_length + duration_since_release + dataset + diagnosis,
+    data = data,
+    family = binomial
+  )
+  print(summary(precision_model_fixed))
+  precision_emm_fixed <- emmeans(precision_model_fixed, 
+                              ~ model_family + diagnosis, 
+                              type = "response")
+  precision_emm_diagnosis=data.frame(precision_emm_fixed)
+  precision_emm_diagnosis
+
+```
+```{r}
+ggplot(precision_emm_diagnosis, aes(x=diagnosis, y=100* prob, color=model_family, fill=model_family)) + geom_col(position="dodge", width = 0.8) + geom_errorbar(aes(ymin=asymp.LCL*100, ymax=asymp.UCL*100), position=position_dodge(width=0.8)) +  scale_x_discrete(name="Elixhauser comorbidity") + scale_y_continuous(name="Precision (%)") + coord_flip() + theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/precision_with_diagnosis.svg", width = 8, height = 8, units = "in")
+ggsave("tables_and_figures_in_paper/precision_with_diagnosis.pdf", width = 8, height = 8, units = "in", device=cairo_pdf)
+```
+```{r}
+recall_info <- recall_emm_diagnosis %>% rename(recall = response, recall_SE = SE, recall_LCL = asymp.LCL, recall_UCL = asymp.UCL)
+precision_info <- precision_emm_diagnosis %>% rename(precision = prob, precision_SE= SE, precision_LCL = asymp.LCL, precision_UCL = asymp.UCL)
+merged <- inner_join(recall_info, precision_info)
+merged
+```
+
+```{r}
+# Closed-source models: same by-diagnosis analysis, mirrored for Claude vs. GPT (no
+# log10_model_size term).
+closed_models_diag <- DAT %>% filter(open_source == "no")
+
+recall_data_closed <- closed_models_diag %>% filter(gt == "True")
+recall_model_fixed_dataset_closed <- glm(
+  GPT.o3.mini_binary == "True" ~ model_family + note_length + duration_since_release + dataset + diagnosis,
+  data = recall_data_closed,
+  family = binomial
+)
+print(summary(recall_model_fixed_dataset_closed))
+recall_emm_fixed_closed <- emmeans(recall_model_fixed_dataset_closed, ~ model_family + diagnosis, type = "response")
+recall_emm_diagnosis_closed <- data.frame(recall_emm_fixed_closed)
+recall_emm_diagnosis_closed
+```
+
+```{r}
+precision_data_closed <- closed_models_diag %>% filter(GPT.o3.mini_binary == "True") %>% mutate(gt = as.factor(gt))
+precision_model_fixed_closed <- glm(
+  gt ~ model_family + note_length + duration_since_release + dataset + diagnosis,
+  data = precision_data_closed,
+  family = binomial
+)
+print(summary(precision_model_fixed_closed))
+precision_emm_fixed_closed <- emmeans(precision_model_fixed_closed, ~ model_family + diagnosis, type = "response")
+precision_emm_diagnosis_closed <- data.frame(precision_emm_fixed_closed)
+precision_emm_diagnosis_closed
+```
+
+```{r}
+recall_info_closed <- recall_emm_diagnosis_closed %>% rename(recall = response, recall_SE = SE, recall_LCL = asymp.LCL, recall_UCL = asymp.UCL)
+precision_info_closed <- precision_emm_diagnosis_closed %>% rename(precision = prob, precision_SE = SE, precision_LCL = asymp.LCL, precision_UCL = asymp.UCL)
+merged_closed <- inner_join(recall_info_closed, precision_info_closed)
+merged_closed
+```
+
+```{r}
+# Bootstrap CI for the by-diagnosis F1: each replicate refits both GLMs and reruns emmeans to
+# get the model_family x diagnosis marginal grid, rather than predicting at a fixed grid.
+fit_f1_by_diagnosis_boot <- function(data) {
+  data <- data %>% mutate(dataset = if_else(startsWith(as.character(recordId), "NIH"), "NIH", "MIMIC"))
+
+  rdata <- data %>% filter(gt == "True")
+  rdata$log10_model_size <- log10(as.numeric(as.character(rdata$model_size)))
+  r_model <- glm(
+    GPT.o3.mini_binary == "True" ~ model_family + log10_model_size + note_length + duration_since_release + dataset + diagnosis,
+    data = rdata, family = binomial
+  )
+  r_emm <- as.data.frame(emmeans(r_model, ~ model_family + diagnosis, type = "response")) %>%
+    select(model_family, diagnosis, recall = response)
+
+  pdata <- data %>% filter(GPT.o3.mini_binary == "True")
+  pdata$gt <- as.factor(pdata$gt)
+  pdata$log10_model_size <- log10(as.numeric(as.character(pdata$model_size)))
+  p_model <- glm(
+    gt ~ model_family + log10_model_size + note_length + duration_since_release + dataset + diagnosis,
+    data = pdata, family = binomial
+  )
+  p_emm <- as.data.frame(emmeans(p_model, ~ model_family + diagnosis, type = "response")) %>%
+    select(model_family, diagnosis, precision = prob)
+
+  inner_join(r_emm, p_emm, by = c("model_family", "diagnosis")) %>%
+    mutate(F1 = 2 * precision * recall / (precision + recall))
+}
+
+unique_notes_diag <- unique(open_models$note_id)
+note_index_diag <- split(seq_len(nrow(open_models)), open_models$note_id)
+n_cores_diag <- min(32, max(1, parallel::detectCores() - 1))
+doParallel::registerDoParallel(cores = n_cores_diag)
+set.seed(42)
+n_boot_diag <- 2000
+note_samples_diag <- lapply(seq_len(n_boot_diag), function(i) sample(unique_notes_diag, length(unique_notes_diag), replace = TRUE))
+boot_results_diag <- foreach::foreach(b = seq_len(n_boot_diag), .packages = c("dplyr", "emmeans"), .errorhandling = "remove") %dopar% {
+  idx <- unlist(note_index_diag[as.character(note_samples_diag[[b]])], use.names = FALSE)
+  tryCatch(fit_f1_by_diagnosis_boot(open_models[idx, ]), error = function(e) NULL)
+}
+boot_results_diag <- boot_results_diag[!sapply(boot_results_diag, is.null)]
+all_boot_diag <- bind_rows(boot_results_diag, .id = "rep")
+ci_summary_diag <- all_boot_diag %>%
+  group_by(model_family, diagnosis) %>%
+  summarise(F1_LCL = quantile(F1, 0.025, na.rm = TRUE),
+            F1_UCL = quantile(F1, 0.975, na.rm = TRUE),
+            .groups = "drop")
+```
+
+```{r}
+# Closed-source models: same bootstrap, mirrored (no log10_model_size term), reusing
+# note_samples_diag so both tracks are resampled consistently.
+fit_f1_by_diagnosis_boot_closed <- function(data) {
+  rdata <- data %>% filter(gt == "True")
+  r_model <- glm(
+    GPT.o3.mini_binary == "True" ~ model_family + note_length + duration_since_release + dataset + diagnosis,
+    data = rdata, family = binomial
+  )
+  r_emm <- as.data.frame(emmeans(r_model, ~ model_family + diagnosis, type = "response")) %>%
+    select(model_family, diagnosis, recall = response)
+
+  pdata <- data %>% filter(GPT.o3.mini_binary == "True")
+  pdata$gt <- as.factor(pdata$gt)
+  p_model <- glm(
+    gt ~ model_family + note_length + duration_since_release + dataset + diagnosis,
+    data = pdata, family = binomial
+  )
+  p_emm <- as.data.frame(emmeans(p_model, ~ model_family + diagnosis, type = "response")) %>%
+    select(model_family, diagnosis, precision = prob)
+
+  inner_join(r_emm, p_emm, by = c("model_family", "diagnosis")) %>%
+    mutate(F1 = 2 * precision * recall / (precision + recall))
+}
+
+note_index_diag_closed <- split(seq_len(nrow(closed_models_diag)), closed_models_diag$note_id)
+boot_results_diag_closed <- foreach::foreach(b = seq_len(n_boot_diag), .packages = c("dplyr", "emmeans"), .errorhandling = "remove") %dopar% {
+  idx <- unlist(note_index_diag_closed[as.character(note_samples_diag[[b]])], use.names = FALSE)
+  tryCatch(fit_f1_by_diagnosis_boot_closed(closed_models_diag[idx, ]), error = function(e) NULL)
+}
+boot_results_diag_closed <- boot_results_diag_closed[!sapply(boot_results_diag_closed, is.null)]
+all_boot_diag_closed <- bind_rows(boot_results_diag_closed, .id = "rep")
+ci_summary_diag_closed <- all_boot_diag_closed %>%
+  group_by(model_family, diagnosis) %>%
+  summarise(F1_LCL = quantile(F1, 0.025, na.rm = TRUE),
+            F1_UCL = quantile(F1, 0.975, na.rm = TRUE),
+            .groups = "drop")
+```
+
+```{r}
+merged <- merged %>%
+  mutate(F1 = 2 * (precision * recall) / (precision + recall)) %>%
+  left_join(ci_summary_diag, by = c("model_family", "diagnosis"))
+merged_closed <- merged_closed %>%
+  mutate(F1 = 2 * (precision * recall) / (precision + recall)) %>%
+  left_join(ci_summary_diag_closed, by = c("model_family", "diagnosis"))
+# Combine open- and closed-source by-diagnosis results into one figure/table (4 model families).
+merged_all <- bind_rows(merged, merged_closed)
+
+# Ground-truth positive count per diagnosis, shown in the axis label.
+n_pos_by_diagnosis <- DAT %>% distinct(note_id, diagnosis, gt) %>% group_by(diagnosis) %>%
+  summarise(n_positive = sum(gt == "True"))
+merged_all <- merged_all %>%
+  left_join(n_pos_by_diagnosis, by = "diagnosis") %>%
+  mutate(diagnosis_label = paste0(diagnosis, " (n=", n_positive, ")"))
+merged_all$diagnosis_label <- factor(merged_all$diagnosis_label, levels = unique(merged_all$diagnosis_label[order(merged_all$diagnosis)]))
+merged_all
+```
+```{r}
+# Point-range plot of F1 by diagnosis, dodged by model family.
+ggplot(merged_all, aes(x=diagnosis_label, y=100*F1, color=model_family)) + geom_pointrange(aes(ymin=100*F1_LCL, ymax=100*F1_UCL), position=position_dodge(width=0.6), size=0.35, linewidth=0.6) + scale_x_discrete(name="Elixhauser comorbidity") + scale_y_continuous(name="F1 score (%)") + coord_flip() + theme_minimal() + theme(legend.title= element_blank(), text=element_text(family="Times New Roman", size = 14))
+ggsave("tables_and_figures_in_paper/f1_with_diagnosis.svg", width = 9, height = 9, units = "in")
+ggsave("tables_and_figures_in_paper/f1_with_diagnosis.pdf", width = 9, height = 9, units = "in", device=cairo_pdf)
+```
+
+```{r}
+write_csv(merged_all, "performance_by_diagnosis.csv")
+```
+

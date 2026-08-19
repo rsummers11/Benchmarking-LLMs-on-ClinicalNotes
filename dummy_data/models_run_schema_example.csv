@@ -1,0 +1,5 @@
+model_family,model_generation,model_size,model,multimodal,open_source,date_of_release,model_name
+Llama,3.1,8,meta-llama/Llama-3.1-8B-Instruct,no,yes,7/23/2024,Llama 3.1 8B
+Qwen,2.5,7,Qwen/Qwen2.5-7B-Instruct,no,yes,9/19/2024,Qwen 2.5 7B
+GPT,,,gpt-4,yes,no,3/14/2023,GPT-4
+Claude,,,claude-3-5-sonnet-20240620,yes,no,6/20/2024,Claude 3.5 Sonnet v1
